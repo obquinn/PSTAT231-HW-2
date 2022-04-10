@@ -1,30 +1,221 @@
 ---
 title: "PSTAT231 Homework 2"
 author: "Olivia Quinn"
-date: "4/6/2022"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
 output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+#library(knitr)
+knitr::opts_chunk$set(echo = TRUE, message = FALSE,
+                      warning = FALSE)
 ```
 
-## R Markdown
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
-
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r cars}
-summary(cars)
+Relevant packages: 
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(readr)
 ```
 
-## Including Plots
 
-You can also embed plots, for example:
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+Data:
+```{r}
+abalone <- read_csv("data/abalone.csv")
+head(abalone)
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+## Linear Regression
+
+
+#### Question 1: Abalone Age 
+
+Abalone age ranges from 2.5 to 30.5 years. The median age is 10.5 years. The histogram shows a bit of a right skew, indicating that a few abalones grow to be much older than others. 
+
+```{r}
+# create age variable 
+abalone <- abalone %>% 
+  mutate(age = rings + 1.5)
+
+# assess and describe the distribution of 'age'
+summary(abalone)
+
+ggplot(abalone, aes(age)) + 
+  geom_histogram(binwidth=1, color = "white") +
+  labs(title= "Histogram of Abalone Age")
+
+```
+
+
+#### Question 2: Split data into training and testing set 
+
+```{r}
+set.seed(24)
+
+abalone_split <- initial_split(abalone, prop = 0.80,
+                                strata = age)
+abalone_train <- training(abalone_split)
+abalone_test <- testing(abalone_split)
+```
+
+
+#### Question 3: Create a recipe predicting age (+ why you shouldn't use rings to predict age)
+
+1.  dummy code "type"
+2.  create interactions between
+    -   `type` and `shucked_weight`,
+    -   `longest_shell` and `diameter`,
+    -   `shucked_weight` and `shell_weight`
+3.  center all predictors, and
+4.  scale all predictors.
+
+*Note: We don't want to use "rings" because it correlates perfectly with our outcome "age". 
+
+```{r}
+abalone_recipe <- recipe(age ~ type + longest_shell + diameter + height + whole_weight + shucked_weight + viscera_weight + shell_weight, data = abalone_train) %>% 
+  step_dummy(all_nominal_predictors()) %>% 
+  step_interact(terms = ~ shucked_weight:starts_with("type")) %>%
+  step_interact(terms = ~ longest_shell:diameter) %>%
+  step_interact(terms = ~ shucked_weight:shell_weight) %>% 
+  step_normalize(all_predictors())
+
+#new set of predictors - rings. 
+summary(abalone_recipe)
+```
+  
+    
+#### 4. Create and store linear regression object 
+
+```{r}
+lm_model <- linear_reg() %>% 
+  set_engine("lm")
+```
+
+  
+#### 5. Workflow + model + recipe
+
+```{r}
+lm_workflow <- workflow() %>% 
+  add_model(lm_model) %>% 
+  add_recipe(abalone_recipe)
+```
+
+  
+#### 6. Predict the age of a hypothetical female abalone with longest_shell = 0.50, diameter = 0.10, height = 0.30, whole_weight = 4, shucked_weight = 1, viscera_weight = 2, shell_weight = 1.
+
+```{r}
+#fit the model to the training set 
+lm_fit <- fit(lm_workflow, abalone_train)
+lm_fit %>% 
+  extract_fit_parsnip() %>% 
+  tidy()
+```
+```{r}
+#predicted age of hypothetical female outlined above : 24.23 years old 
+
+female <- data.frame(type = "F", longest_shell = 0.50, diameter = 0.10, height = 0.30, whole_weight = 4, shucked_weight = 1, viscera_weight = 2, shell_weight = 1)
+
+predict(lm_fit, new_data = female)
+```
+
+  
+#### 7. Assess Model Performance
+
+```{r}
+#create tibble of predicted and observed values for "age" in the training set 
+abalone_train_res <- predict(lm_fit, new_data = abalone_train %>% select(-age))
+abalone_train_res <- bind_cols(abalone_train_res, abalone_train %>% select(age))
+
+abalone_train_res %>% 
+  head()
+```
+The metrics for this linear model: 
+  
+- RMSE = 2.15  
+
+- $R^2$ = 0.56 
+
+- MAE = 1.55
+
+
+The $R^2$ of this model is good, but underwhelming. The various predictors acting together (and not including rings) predict 56% of the variation in age. If number of rings predicts *more* of the variation in age, it might still be worth cracking them open to get a more accurate measure of age. 
+
+
+```{r}
+abalone_metrics <- metric_set(rmse, rsq, mae)
+abalone_metrics(abalone_train_res, truth = age, 
+                estimate = .pred)
+```
+
+## 231 Questions
+
+
+#### Question 8: Which term(s) in the bias-variance tradeoff above represent the reproducible error? Which term(s) represent the irreducible error?
+
+$var(\hat{f}(x_0))+[bias(\hat{f}(x_0))]^2$ represent the reducible error. 
+
+$var(\epsilon)$ represents the irreducible error. 
+
+
+#### Question 9: Using the bias-variance tradeoff above, demonstrate that the expected test error is always at least as large as the irreducible error.
+
+$$
+E[(y_0 - \hat{f}(x_0))^2]=var(\hat{f}(x_0))+[bias(\hat{f}(x_0))]^2+var(\epsilon)
+$$
+Under the "best we can do" assumption where the outcome of our modeled function $\hat{f}(x_0)$ is equal to the "true" expectation of $Y$:
+
+$$
+\hat{f}(x_0) = E[{Y}|{X} = x_0]
+$$
+We can assume that the first right-hand term is equivalent to 
+
+$var(\hat{f}(x_0)) = var(E[{Y}|{X} = x_0]) = 0$, 
+
+and the second right-hand term is equivalent to
+
+$[bias(\hat{f}(x_0))]^2 = [bias(E[{Y}|{X} = x_0]))^2 = 0$,
+
+leaving only
+
+$= 0 + 0 + var(\epsilon)$
+
+
+#### Question 10: Prove the bias-variance tradeoff.
+
+Starting with the test MSE and the assumption (from above) that $y=f(x) + \epsilon$:
+
+$E[(y_0-\hat{f}(x_0))^2] = E[(f(x_0) + \epsilon - \hat{f}(x_0))^2]$
+
+$=E[(f(x_0) - \hat{f}(x_0))^2] + E[\epsilon^2] + 2E[({f}(x_0) -\hat{f}(x_0))\epsilon]$
+
+$=E[(f(x_0) - \hat{f}(x_0))^2] + E[\epsilon^2] + 2E[({f}(x_0) -\hat{f}(x_0))] E[\epsilon]$
+
+$=E[(f(x_0) - \hat{f}(x_0))^2] + Var(\epsilon)$  **(solution 1)**
+
+
+**Now, starting with the reducible error:**
+
+$E[(f(x_0) - \hat{f}(x_0))^2] = E[((f(x_0) - E[\hat{f}(x_0)]) - (\hat{f}(x_0) -E[\hat{f}(x_0)]))^2]$ 
+
+$= E[(E[\hat{f}(x_0)] - f(x_0))^2] + E[(\hat{f}(x_0) - E[\hat{f}(x_0)]^2] - 2E[(f(x_0) - E[\hat{f}(x_0)])(\hat{f}(x_0) -E[\hat{f}(x_0)])$
+
+$= (E[\hat{f}(x_0)] - f(x_0))^2 + E[(\hat{f}(x_0) - E[\hat{f}(x_0)])^2] - 2(f(x_0) - E[\hat{f}(x_0)] E[(\hat{f}(x_0)-E[\hat{f}(x_0)])]$
+
+$= bias[\hat{f}(x_0)]^2 + var(\hat{f}(x_0)) - 2(f(x_0) - E[\hat{f}(x_0)]) (E[\hat{f}(x_0)] - E[\hat{f}(x_0)])$
+
+$= bias[\hat{f}(x_0)]^2 + var(\hat{f}(x_0))$ **(solution 2)**
+
+
+**Combining solutions 1 and 2:** 
+
+$E[(y_0-\hat{f}(x_0))^2] = bias[\hat{f}(x_0)]^2 + var(\hat{f}(x_0)) + var(\epsilon)$
+
+
+
+
+
+
+
